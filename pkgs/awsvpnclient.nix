@@ -179,6 +179,7 @@ buildFHSEnv {
                 # so configure-dns must use absolute paths like /usr/bin/resolvectl
                 if [ -f /opt/awsvpnclient/Service/Resources/openvpn/configure-dns ]; then
                   ${gnused}/bin/sed -i 's|resolvectl |/usr/bin/resolvectl |g' /opt/awsvpnclient/Service/Resources/openvpn/configure-dns
+                  ${gnused}/bin/sed -i 's|ip link|/sbin/ip link|g' /opt/awsvpnclient/Service/Resources/openvpn/configure-dns
 
                   # Update the checksum in the DLL to match the patched configure-dns
                   # The Service validates SHA256 checksums of OpenVPN resources before use

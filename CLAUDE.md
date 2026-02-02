@@ -150,7 +150,7 @@ The application validates SHA256 checksums of all files in `/opt/awsvpnclient/Se
 2. **FHS wrapper** creates tmpfs overlays for `/opt/awsvpnclient/Service`
 3. **Profile script** (runs at service startup):
    - Copies Service directory from Nix store to writable tmpfs
-   - Patches `configure-dns` to use absolute paths (e.g., `resolvectl` → `/usr/bin/resolvectl`)
+   - Patches `configure-dns` to use absolute paths (e.g., `resolvectl` → `/usr/bin/resolvectl`, `ip link` → `/sbin/ip link`)
    - Calculates new SHA256 checksum of patched script
    - Binary patches `ACVC.GTK.Service.dll` using Python to update the checksum (stored as UTF-16LE)
 4. **Validation passes** because DLL now expects the patched file's checksum
@@ -222,3 +222,10 @@ If the Python script fails to patch the DLL:
 - Verify Python3 is available in the FHS environment
 - Check that `OLD_CHECKSUM` is found in the DLL (stored as UTF-16LE)
 - Service logs should show either "Checksum patched successfully" or "Warning: Old checksum not found in DLL"
+
+### Docker Compose Networks Break After VPN Connection
+If Docker bridge networks stop working after connecting to VPN (requires reboot to fix):
+- **Root Cause:** The `configure-dns` down script fails to run `ip link show` command (exit code 127: command not found)
+- **Symptom:** Check `/var/log/aws-vpn-client/configure-dns-down.log` for `'ip link show dev tun0' exit code: 127`
+- **Fix:** The `ip` command is now patched to use absolute path `/sbin/ip` (similar to resolvectl fix)
+- **Verification:** After disconnecting VPN, check configure-dns-down.log shows successful cleanup with exit code 0
