@@ -190,6 +190,9 @@ buildFHSEnv creates a chroot-like environment with standard FHS layout:
 - `programs.awsvpnclient.package` - Override package version
 - `programs.awsvpnclient.enableResolved` - Control systemd-resolved integration
 
+**mDNS Configuration:**
+When `enableResolved` is enabled, the module automatically configures systemd-resolved to use `.local` as a routing domain. This enables mDNS resolution for single-label hostnames (e.g., `ping desktop` will try mDNS and resolve to `desktop.local`). Without this, you must use the full `.local` suffix (e.g., `ping desktop.local`).
+
 ## Troubleshooting
 
 ### VPN Connection Fails
@@ -229,3 +232,10 @@ If Docker bridge networks stop working after connecting to VPN (requires reboot 
 - **Symptom:** Check `/var/log/aws-vpn-client/configure-dns-down.log` for `'ip link show dev tun0' exit code: 127`
 - **Fix:** The `ip` command is now patched to use absolute path `/sbin/ip` (similar to resolvectl fix)
 - **Verification:** After disconnecting VPN, check configure-dns-down.log shows successful cleanup with exit code 0
+
+### mDNS / Local Hostname Resolution Not Working
+If you can't resolve local hostnames (e.g., `ping desktop` fails but `ping desktop.local` works):
+- **Root Cause:** systemd-resolved doesn't automatically try mDNS for single-label hostnames without a routing domain configured
+- **Solution:** The NixOS module now configures `~local` as a routing domain when `enableResolved` is enabled
+- **Verification:** After rebuilding, run `resolvectl domain` and verify "~local" appears in the global domain list
+- **Alternative:** Always use the full `.local` suffix (e.g., `desktop.local` instead of `desktop`)

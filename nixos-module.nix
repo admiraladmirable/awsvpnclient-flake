@@ -36,6 +36,10 @@ in
     # Practical default (can disable if you already manage DNS another way)
     services.resolved.enable = lib.mkIf cfg.enableResolved true;
 
+    # Configure systemd-resolved to use .local search domain for mDNS
+    # This allows single-label hostnames like "desktop" to resolve via mDNS
+    services.resolved.domains = lib.mkIf cfg.enableResolved [ "~local" ];
+
     # Register D-Bus configuration
     services.dbus.packages = [ cfg.package ];
 
