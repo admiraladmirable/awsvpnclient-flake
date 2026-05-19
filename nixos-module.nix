@@ -7,6 +7,23 @@
 
 let
   cfg = config.programs.awsvpnclient;
+
+  restoreIpForwarding = pkgs.writeShellScript "awsvpnclient-restore-ip-forwarding" ''
+    state_file="/var/lib/awsvpnclient/ip_forward.before"
+
+    if [ ! -f "$state_file" ]; then
+      exit 0
+    fi
+
+    read -r value < "$state_file" || value=""
+    case "$value" in
+      0|1)
+        ${pkgs.procps}/bin/sysctl -w "net.ipv4.ip_forward=$value" || true
+        ;;
+    esac
+
+    ${pkgs.coreutils}/bin/rm -f "$state_file"
+  '';
 in
 {
   options.programs.awsvpnclient = {
@@ -81,6 +98,7 @@ in
         Type = "simple";
         # Run the service inside the FHS environment
         ExecStart = "${cfg.package.service}/bin/awsvpnclient-service";
+        ExecStopPost = "${restoreIpForwarding}";
         Restart = "always";
         RestartSec = "1s";
         StandardOutput = "journal";

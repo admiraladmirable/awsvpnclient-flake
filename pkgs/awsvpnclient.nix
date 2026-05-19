@@ -2,6 +2,7 @@
   lib,
   buildFHSEnv,
   callPackage,
+  runCommand,
   writeShellScript,
   gtk3,
   glib,
@@ -14,7 +15,14 @@
   gdk-pixbuf,
   libdrm,
   mesa,
-  xorg,
+  libx11,
+  libxcomposite,
+  libxdamage,
+  libxext,
+  libxfixes,
+  libxrandr,
+  libxcb,
+  libxshmfence,
   libxkbcommon,
   dbus,
   alsa-lib,
@@ -32,12 +40,36 @@
   musl,
   procps,
   systemd,
-  gnused,
   python3,
 }:
 
 let
   unwrapped = callPackage ./awsvpnclient-unwrapped.nix { };
+
+  sysctlWrapper = writeShellScript "awsvpnclient-sysctl" ''
+    if [ "$#" -eq 2 ] && [ "$1" = "-w" ] && [ "$2" = "net.ipv4.ip_forward=0" ]; then
+      state_dir="/var/lib/awsvpnclient"
+      state_file="$state_dir/ip_forward.before"
+
+      ${coreutils}/bin/mkdir -p "$state_dir"
+      if [ ! -e "$state_file" ]; then
+        tmp_file="$state_file.$$"
+        if ${procps}/bin/sysctl -n net.ipv4.ip_forward > "$tmp_file"; then
+          ${coreutils}/bin/mv -f "$tmp_file" "$state_file"
+        else
+          ${coreutils}/bin/rm -f "$tmp_file"
+        fi
+      fi
+    fi
+
+    exec ${procps}/bin/sysctl "$@"
+  '';
+
+  sysctlWrapperPackage = runCommand "awsvpnclient-sysctl" { } ''
+    install -Dm755 ${sysctlWrapper} $out/bin/sysctl
+    mkdir -p $out/sbin
+    ln -s ../bin/sysctl $out/sbin/sysctl
+  '';
 
   # Common target packages for all FHS environments
   commonTargetPkgs = pkgs: [
@@ -56,14 +88,14 @@ let
     gdk-pixbuf
     libdrm
     mesa
-    xorg.libX11
-    xorg.libXcomposite
-    xorg.libXdamage
-    xorg.libXext
-    xorg.libXfixes
-    xorg.libXrandr
-    xorg.libxcb
-    xorg.libxshmfence
+    libx11
+    libxcomposite
+    libxdamage
+    libxext
+    libxfixes
+    libxrandr
+    libxcb
+    libxshmfence
     libxkbcommon
     dbus
     alsa-lib
@@ -81,7 +113,8 @@ let
     iptables
     util-linux
     sqlite
-    procps # provides sysctl for IP forwarding control
+    procps # provides ps and other process utilities used by the service
+    (lib.hiPrio sysctlWrapperPackage)
     systemd # provides resolvectl for DNS configuration
 
     # OpenSSL for .NET runtime (separate from bundled musl OpenSSL for FIPS)
@@ -178,13 +211,75 @@ buildFHSEnv {
                 # OpenVPN sanitizes the environment and doesn't pass PATH to child processes,
                 # so configure-dns must use absolute paths like /usr/bin/resolvectl
                 if [ -f /opt/awsvpnclient/Service/Resources/openvpn/configure-dns ]; then
-                  ${gnused}/bin/sed -i 's|resolvectl |/usr/bin/resolvectl |g' /opt/awsvpnclient/Service/Resources/openvpn/configure-dns
-                  ${gnused}/bin/sed -i 's|ip link|/sbin/ip link|g' /opt/awsvpnclient/Service/Resources/openvpn/configure-dns
+                  OLD_CHECKSUM=$(${coreutils}/bin/sha256sum /opt/awsvpnclient/Service/Resources/openvpn/configure-dns | ${coreutils}/bin/cut -d' ' -f1)
+
+                  # Restore the host's previous IPv4 forwarding state when the UI disconnects.
+                  # The vendor service disables forwarding on connect; Docker bridge networking
+                  # expects NixOS/Docker to restore it after the VPN session ends.
+                  ${python3}/bin/python3 << 'EOF'
+        from pathlib import Path
+        import sys
+
+        path = Path('/opt/awsvpnclient/Service/Resources/openvpn/configure-dns')
+        text = path.read_text()
+
+        replacements = {
+            'output=$(resolvectl status 2>&1)': 'output=$(/usr/bin/resolvectl status 2>&1)',
+            'output=$(resolvectl "$@" 2>&1)': 'output=$(/usr/bin/resolvectl "$@" 2>&1)',
+            'device_info="$(ip link show dev "$dev")"': 'device_info="$(/sbin/ip link show dev "$dev")"',
+        }
+        for before, after in replacements.items():
+            if before not in text and after not in text:
+                print(f'configure-dns command pattern not found: {before}', file=sys.stderr)
+                sys.exit(1)
+            text = text.replace(before, after, 1)
+
+        restore_function = """restore_ip_forwarding() {
+          local state_file="/var/lib/awsvpnclient/ip_forward.before"
+          local value output exit_code
+
+          if [[ ! -f "$state_file" ]]; then
+            return 0
+          fi
+
+          read -r value < "$state_file" || value=""
+          if [[ "$value" == "0" || "$value" == "1" ]]; then
+            log "Restoring net.ipv4.ip_forward=$value"
+            output=$(${procps}/bin/sysctl -w "net.ipv4.ip_forward=$value" 2>&1)
+            exit_code=$?
+            log "sysctl restore exit code: $exit_code, output: $output"
+          else
+            log "Skipping invalid saved net.ipv4.ip_forward value: $value"
+          fi
+
+          ${coreutils}/bin/rm -f "$state_file"
+        }
+        """
+
+        if 'restore_ip_forwarding() {' not in text:
+            target = 'reset_dns() {\n'
+            if target not in text:
+                print('reset_dns function not found in configure-dns', file=sys.stderr)
+                sys.exit(1)
+            text = text.replace(target, restore_function + '\n' + target, 1)
+
+        if '\n  restore_ip_forwarding\n' not in text:
+            lines = text.splitlines(keepends=True)
+            for idx, line in enumerate(lines):
+                if line.strip() == 'call_resolvectl "revert" "$dev"':
+                    lines.insert(idx + 1, '  restore_ip_forwarding\n')
+                    text = "".join(lines)
+                    break
+            else:
+                print('reset_dns restore insertion point not found in configure-dns', file=sys.stderr)
+                sys.exit(1)
+
+        path.write_text(text)
+        EOF
 
                   # Update the checksum in the DLL to match the patched configure-dns
                   # The Service validates SHA256 checksums of OpenVPN resources before use
                   NEW_CHECKSUM=$(${coreutils}/bin/sha256sum /opt/awsvpnclient/Service/Resources/openvpn/configure-dns | ${coreutils}/bin/cut -d' ' -f1)
-                  OLD_CHECKSUM="8d1b167e7c1fb63f8f1be3216f85355c13780829e50d76a983820c18cc3f7799"
 
                   # Checksums are stored as UTF-16LE in the .NET assembly
                   # Use Python for reliable binary patching

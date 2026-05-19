@@ -18,7 +18,6 @@
   gdk-pixbuf,
   libdrm,
   mesa,
-  xorg,
   libxkbcommon,
   dbus,
   alsa-lib,
@@ -55,7 +54,7 @@ stdenv.mkDerivation {
     autoPatchelfHook
   ];
 
-  buildInputs = [
+  buildInputs = with pkgs; [
     stdenv.cc.cc.lib
     gtk3
     glib
@@ -68,14 +67,14 @@ stdenv.mkDerivation {
     gdk-pixbuf
     libdrm
     mesa
-    xorg.libX11
-    xorg.libXcomposite
-    xorg.libXdamage
-    xorg.libXext
-    xorg.libXfixes
-    xorg.libXrandr
-    xorg.libxcb
-    xorg.libxshmfence
+    libx11
+    libxcomposite
+    libxdamage
+    libxext
+    libxfixes
+    libxrandr
+    libxcb
+    libxshmfence
     libxkbcommon
     dbus
     alsa-lib
